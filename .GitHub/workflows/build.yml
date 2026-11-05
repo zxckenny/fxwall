@@ -1,0 +1,48 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Распаковать проект
+        run: |
+          set -e
+          if ls ./*.zip >/dev/null 2>&1; then
+            ZIP=$(for f in ./*.zip; do echo "$(git log -1 --format=%ct -- "$f") $f"; done | sort -n | tail -1 | cut -d' ' -f2-)
+            echo "Берём архив: $ZIP"
+            rm -rf _proj && mkdir _proj
+            unzip -q "$ZIP" -d _proj
+            S=$(find _proj -name settings.gradle.kts | head -1)
+            [ -n "$S" ] || { echo "settings.gradle.kts не найден в архиве"; exit 1; }
+            ROOT=$(dirname "$S")
+          else
+            ROOT=.
+          fi
+          echo "Корень проекта: $ROOT"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Собрать APK
+        run: cd "$ROOT" && gradle assembleDebug --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FxWall-apk
+          path: ${{ env.ROOT }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
