@@ -1,0 +1,77 @@
+name: Build APK
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Найти проект
+        run: |
+          set -e
+          if ls ./*.zip >/dev/null 2>&1; then
+            ZIP=$(for f in ./*.zip; do echo "$(git log -1 --format=%ct -- "$f") $f"; done | sort -n | tail -1 | cut -d' ' -f2-)
+            echo "Архив: $ZIP"
+            rm -rf _proj && mkdir _proj
+            unzip -q "$ZIP" -d _proj
+            S=$(find _proj -name settings.gradle.kts -not -path "*/__MACOSX/*" | awk '{ print length, $0 }' | sort -n | head -1 | cut -d' ' -f2-)
+            [ -n "$S" ] || { echo "::error::В архиве нет settings.gradle.kts"; exit 1; }
+            ROOT=$(dirname "$S")
+          else
+            ROOT=.
+          fi
+          echo "Корень проекта: $ROOT"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Подготовить Android SDK
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKM" ]; then
+            yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+            "$SDKM" "platforms;android-34" "build-tools;34.0.0" >/dev/null 2>&1 || true
+          fi
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Собрать APK
+        run: cd "$ROOT" && gradle assembleDebug --stacktrace --no-daemon
+
+      - name: Подготовить файл
+        run: cp "$ROOT/app/build/outputs/apk/debug/app-debug.apk" FxWall.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FxWall-apk
+          path: FxWall.apk
+          if-no-files-found: error
+
+      - name: Опубликовать в Releases
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: FxWall сборка ${{ github.run_number }}
+          prerelease: true
+          files: FxWall.apk
